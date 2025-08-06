@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, FC, FormEvent, Dispatch, SetStateAction, useCallback, Ref } from 'react';
+import '../styles/globals.css';
 
 // --- 型定義 ---
 interface HistoryItem {
