@@ -519,4 +519,5 @@ export default function Home() {
     <div className="bg-gray-900 text-white font-sans flex flex-col h-full">
       {renderPage()}
     </div>
-  )
+  );
+}
