@@ -1,5 +1,4 @@
 import React, { useState, useRef, useEffect, FC, FormEvent, Dispatch, SetStateAction, useCallback, Ref } from 'react';
-import '../styles/globals.css';
 
 // --- 型定義 ---
 interface HistoryItem {
@@ -18,6 +17,7 @@ interface AppConfig {
   reminderInterval: number;
   enableKeywords: boolean;
   enableSummary: boolean;
+  useOnlineHistory: boolean; // ★ オンライン履歴を使用するかの設定を追加
 }
 
 interface Message {
@@ -66,6 +66,7 @@ const SettingsPage: FC<{ initialConfig: AppConfig; onSave: (config: AppConfig) =
     const [tempReminderInterval, setTempReminderInterval] = useState(initialConfig.reminderInterval);
     const [tempEnableKeywords, setTempEnableKeywords] = useState(initialConfig.enableKeywords);
     const [tempEnableSummary, setTempEnableSummary] = useState(initialConfig.enableSummary);
+    const [tempUseOnlineHistory, setTempUseOnlineHistory] = useState(initialConfig.useOnlineHistory); // ★ オンライン履歴設定用のstate
 
     const handleSave = () => {
         onSave({ 
@@ -76,6 +77,7 @@ const SettingsPage: FC<{ initialConfig: AppConfig; onSave: (config: AppConfig) =
             reminderInterval: tempReminderInterval,
             enableKeywords: tempEnableKeywords,
             enableSummary: tempEnableSummary,
+            useOnlineHistory: tempUseOnlineHistory, // ★ 保存データに含める
         });
     };
 
@@ -109,6 +111,7 @@ const SettingsPage: FC<{ initialConfig: AppConfig; onSave: (config: AppConfig) =
                     <div className="space-y-4">
                         <ToggleSwitch label="キーワード抽出を有効にする" enabled={tempEnableKeywords} setEnabled={setTempEnableKeywords} />
                         <ToggleSwitch label="会話のまとめを有効にする" enabled={tempEnableSummary} setEnabled={setTempEnableSummary} />
+                        <ToggleSwitch label="オンラインで履歴を保存" enabled={tempUseOnlineHistory} setEnabled={setTempUseOnlineHistory} />
                     </div>
                 </div>
                 <hr className="border-gray-700" />
@@ -278,29 +281,32 @@ export default function Home() {
   const [isSummarizing, setIsSummarizing] = useState(false);
   const [historyItems, setHistoryItems] = useState<HistoryItem[]>([]);
   const [selectedHistoryItem, setSelectedHistoryItem] = useState<HistoryItem | null>(null);
-  const [config, setConfig] = useState<AppConfig>({ apiKey: '', localEndpoint: '', pin: '', enableReminder: true, reminderInterval: 1, enableKeywords: true, enableSummary: true });
+  const [config, setConfig] = useState<AppConfig>({ apiKey: '', localEndpoint: '', pin: '', enableReminder: true, reminderInterval: 1, enableKeywords: true, enableSummary: true, useOnlineHistory: true });
   const [enteredPin, setEnteredPin] = useState('');
   const [pinError, setPinError] = useState('');
   const [reminder, setReminder] = useState<{ theme: string } | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const CONFIG_KEY = 'appConfig';
+  const HISTORY_KEY = 'appHistory'; // ★ ローカル保存用のキー
   const REMINDER_KEY = 'lastSessionForReminder';
 
+  // ★ Vercel KVから履歴を取得する関数
   const getHistoryFromKV = useCallback(async (): Promise<HistoryItem[]> => {
     try {
         const res = await fetch('/api/history');
         if (!res.ok) {
-            console.error('Failed to fetch history');
+            console.error('Failed to fetch history from KV');
             return [];
         }
         return res.json();
     } catch (error) {
-        console.error('Error fetching history:', error);
+        console.error('Error fetching history from KV:', error);
         return [];
     }
   }, []);
 
+  // ★ Vercel KVへ履歴を保存する関数
   const saveHistoryToKV = async (newHistoryItem: HistoryItem) => {
     try {
         await fetch('/api/history', {
@@ -309,7 +315,27 @@ export default function Home() {
             body: JSON.stringify(newHistoryItem),
         });
     } catch (error) {
-        console.error('Error saving history:', error);
+        console.error('Error saving history to KV:', error);
+    }
+  };
+  
+  // ★ ローカルストレージから履歴を取得する関数
+  const getHistoryFromLocalStorage = useCallback((): HistoryItem[] => {
+    try {
+      const savedHistoryJSON = localStorage.getItem(HISTORY_KEY);
+      return savedHistoryJSON ? JSON.parse(savedHistoryJSON) : [];
+    } catch (error) {
+      console.error('Error fetching history from localStorage:', error);
+      return [];
+    }
+  }, []);
+
+  // ★ ローカルストレージへ履歴を保存する関数
+  const saveHistoryToLocalStorage = (newHistoryItems: HistoryItem[]) => {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(newHistoryItems));
+    } catch (error) {
+      console.error('Error saving history to localStorage:', error);
     }
   };
 
@@ -327,21 +353,19 @@ export default function Home() {
     }
   }, []);
 
-  const loadSettingsAndGoToTheme = useCallback((loadedConfig: AppConfig) => {
+  const loadSettingsAndGoToTheme = useCallback(async (loadedConfig: AppConfig) => {
     setConfig(loadedConfig);
-    const loadHistory = async () => {
-      const items = await getHistoryFromKV();
-      setHistoryItems(items);
-    };
-    loadHistory();
+    // ★ 設定に応じて読み込み先を切り替える
+    const items = loadedConfig.useOnlineHistory ? await getHistoryFromKV() : getHistoryFromLocalStorage();
+    setHistoryItems(items);
     checkForReminder(loadedConfig);
     setCurrentPage('theme');
-  }, [checkForReminder, getHistoryFromKV]);
+  }, [checkForReminder, getHistoryFromKV, getHistoryFromLocalStorage]);
 
   useEffect(() => {
     const loadConfig = () => {
       const savedConfigJSON = localStorage.getItem(CONFIG_KEY);
-      const defaultConfig: AppConfig = { apiKey: '', localEndpoint: '', pin: '', enableReminder: true, reminderInterval: 1, enableKeywords: true, enableSummary: true };
+      const defaultConfig: AppConfig = { apiKey: '', localEndpoint: '', pin: '', enableReminder: true, reminderInterval: 1, enableKeywords: true, enableSummary: true, useOnlineHistory: true };
       if (savedConfigJSON) {
         const loadedConfig = { ...defaultConfig, ...JSON.parse(savedConfigJSON) };
         if (loadedConfig.pin) {
@@ -356,8 +380,7 @@ export default function Home() {
       }
     };
     setTimeout(loadConfig, 10);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // This effect should run only once on mount
+  }, [loadSettingsAndGoToTheme]);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -372,7 +395,7 @@ export default function Home() {
     e.preventDefault();
     const savedConfigJSON = localStorage.getItem(CONFIG_KEY);
     if (!savedConfigJSON) return;
-    const defaultConfig: AppConfig = { apiKey: '', localEndpoint: '', pin: '', enableReminder: true, reminderInterval: 1, enableKeywords: true, enableSummary: true };
+    const defaultConfig: AppConfig = { apiKey: '', localEndpoint: '', pin: '', enableReminder: true, reminderInterval: 1, enableKeywords: true, enableSummary: true, useOnlineHistory: true };
     const savedConfig = {...defaultConfig, ...JSON.parse(savedConfigJSON)};
     if (enteredPin === savedConfig.pin) {
       setPinError('');
@@ -396,9 +419,19 @@ export default function Home() {
   const handleReturnToTheme = async () => {
     if (theme.trim() && messages.length > 1) {
       const newHistoryItem: HistoryItem = { id: `session_${Date.now()}`, theme, date: new Date().toISOString(), keywords, summary };
-      await saveHistoryToKV(newHistoryItem);
-      const currentHistory = await getHistoryFromKV();
-      setHistoryItems(currentHistory);
+      
+      // ★ 設定に応じて保存先を切り替える
+      if (config.useOnlineHistory) {
+        await saveHistoryToKV(newHistoryItem);
+        const updatedHistory = await getHistoryFromKV();
+        setHistoryItems(updatedHistory);
+      } else {
+        const currentHistory = getHistoryFromLocalStorage();
+        const updatedHistory = [...currentHistory, newHistoryItem];
+        saveHistoryToLocalStorage(updatedHistory);
+        setHistoryItems(updatedHistory);
+      }
+      
       localStorage.setItem(REMINDER_KEY, JSON.stringify({ theme, date: new Date().toISOString() }));
     }
     setTheme(''); setMessages([]); setInputValue(''); setKeywords([]); setSummary('');
